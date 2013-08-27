@@ -47,7 +47,7 @@ namespace CoreyM.Collections
 {
 	public class AATree<TKey, TValue> : IEnumerable<KeyValuePair<TKey, TValue>>
 	{
-		[DebuggerDisplay("{key}\t-> {value}")]
+		[DebuggerDisplay("{key}\t->{value} [{level}, {Parent.key}]")]
 		public class Node
 		{
 			// node internal data
@@ -60,22 +60,14 @@ namespace CoreyM.Collections
 			internal TKey key;
 			internal TValue value;
 
-			// constuctor for the sentinel node
-			internal Node()
-			{
-				this.level = 0;
-				this.Parent = null;
-				this.left = this;
-				this.right = this;
-			}
-
 			// constuctor for regular nodes (that all start life as leaf nodes)
-			internal Node(Node parent, TKey key, TValue value, Node sentinel)
+			internal Node(Node parent, TKey key, TValue value)
 			{
+				Contract.Requires(parent != null);
 				this.level = 1;
 				this.Parent = parent;
-				this.left = sentinel;
-				this.right = sentinel;
+				this.left = null;
+				this.right = null;
 				this.key = key;
 				this.value = value;
 			}
@@ -92,7 +84,7 @@ namespace CoreyM.Collections
 					if (level < 1)
 						return null;
 					Node curr = this;
-					while (curr.left.level > 0)
+					while (curr.left != null)
 						curr = curr.left;
 					return curr;
 				}
@@ -105,7 +97,7 @@ namespace CoreyM.Collections
 					if (level < 1)
 						return null;
 					Node curr = this;
-					while (curr.right.level > 0)
+					while (curr.right != null)
 						curr = curr.right;
 					return curr;
 				}
@@ -115,7 +107,7 @@ namespace CoreyM.Collections
 			{
 				get
 				{
-					if (right.level < 1)
+					if (right == null)
 					{
 						Node node = this;
 						while (true)
@@ -136,7 +128,7 @@ namespace CoreyM.Collections
 			{
 				get
 				{
-					if (left.level < 1)
+					if (left == null)
 					{
 						Node node = this;
 						while (true)
@@ -152,32 +144,17 @@ namespace CoreyM.Collections
 						return left.RightMost;
 				}
 			}
-
-			#region Contract
-			[ContractInvariantMethod]
-			private void ObjectInvariant()
-			{
-				Contract.Invariant(left.level < 1 || left.Parent == this);
-				Contract.Invariant(left.level < level);
-				Contract.Invariant(right.level < 1 || right.Parent == this);
-			}
-			#endregion
 		}
 
 		private IComparer<TKey> KeyComparer;
 		private IComparer<TValue> ValueComparer;
 
 		Node root;
-		Node sentinel;
-		Node deleted;
 
 		private AATree(IComparer<TKey> keyComparer, IComparer<TValue> valueComparer)
 		{
 			KeyComparer = keyComparer;
 			ValueComparer = valueComparer;
-
-			root = sentinel = new Node();
-			deleted = null;
 		}
 
 		public AATree()
@@ -205,6 +182,11 @@ namespace CoreyM.Collections
 			return (KeyComparer ?? Comparer<TKey>.Default).Compare(l, r.key);
 		}
 
+		internal int Compare(TValue l, Node r)
+		{
+			return (ValueComparer ?? Comparer<TValue>.Default).Compare(l, r.value);
+		}
+
 		internal int Compare(TKey lk, TValue lv, Node r)
 		{
 			if (ValueComparer != null)
@@ -214,15 +196,19 @@ namespace CoreyM.Collections
 
 		public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
 		{
-			if (root.level < 1)
+			if (root == null)
 				yield break;
+
+			int n = 0;
 
 			Node curr = root.LeftMost;
 			do
 			{
 				yield return curr.KeyValuePair;
 				curr = curr.next;
-
+				++n;
+				if (n > 10000)
+					break;
 			} while (curr != null);
 		}
 
@@ -251,7 +237,7 @@ namespace CoreyM.Collections
 		/// <param name="node"></param>
 		private void Skew(ref Node node)
 		{
-			if (node.level == node.left.level)
+			if (node.left != null && node.level == node.left.level)
 			{
 				// [a L> b R> c] => [b R> a L> c]
 				Node a = node;
@@ -267,7 +253,7 @@ namespace CoreyM.Collections
 				a.Parent = b;
 				a.left = c;
 
-				if (c.level > 0)
+				if (c != null)
 					c.Parent = a;
 
 				node = b;
@@ -276,7 +262,7 @@ namespace CoreyM.Collections
 
 		private void Split(ref Node node)
 		{
-			if (node.right.right.level == node.level)
+			if (node.right != null && node.right.right != null && node.right.right.level == node.level)
 			{
 				// [a R> b L> c] => [b L> a R> c]
 				Node a = node;
@@ -291,10 +277,11 @@ namespace CoreyM.Collections
 				a.Parent = b;
 				a.right = c;
 
-				if (c.level > 0)
+				if (c != null)
 					c.Parent = a;
 
-				b.level++;
+				if (b != null)
+					b.level++;
 				node = b;
 			}
 		}
@@ -303,9 +290,10 @@ namespace CoreyM.Collections
 		{
 			Contract.Requires(depth < 100);
 
-			if (node == sentinel)
+			if (node == null)
 			{
-				node = new Node(parent, key, value, sentinel);
+				node = new Node(parent, key, value);
+				CheckNode(node);
 				return true;
 			}
 
@@ -336,64 +324,175 @@ namespace CoreyM.Collections
 			return true;
 		}
 
-		private bool Delete(ref Node node, TKey key)
+		private void CheckAll()
 		{
-			Contract.Requires(node != null);
-			
-			if (node == sentinel)
-				return (deleted != null);
-
-			int compare = Compare(key, node);
-			if (compare < 0)
+			Node c = root == null ? null : root.LeftMost;
+			while (c != null)
 			{
-				if (!Delete(ref node.left, key))
+				CheckNode(c);
+				c = c.next;
+			}
+		}
+
+		private void CheckNode(Node n)
+		{
+			if (n == null)
+				return;
+			Debug.Assert(n.Parent == null || n.Parent.left == n || n.Parent.right == n);
+			Debug.Assert(n.left == null || n.left.Parent == n);
+			Debug.Assert(n.right == null || n.right.Parent == n);
+
+			if (ValueComparer != null)
+			{
+				Debug.Assert(n.left == null || ValueComparer.Compare(n.left.value, n.value) < 0);
+				Debug.Assert(n.right == null || ValueComparer.Compare(n.right.value, n.value) > 0);
+			}
+
+			if (n.left != null)
+			{
+				Debug.Assert(n.left.left == null || n.left.left.Parent == n.left);
+				Debug.Assert(n.left.right == null || n.left.right.Parent == n.left);
+			}
+			if (n.right != null)
+			{
+				Debug.Assert(n.right.left == null || n.right.left.Parent == n.right);
+				Debug.Assert(n.right.right == null || n.right.right.Parent == n.right);
+			}
+		}
+
+		private bool Delete(Node node)
+		{
+			//CheckNode(node);
+			if (node == null)
+				return false;
+
+			int c = Count;
+
+			Node p = node.Parent;
+
+			if (node.left == null && node.right == null)
+			{
+				Console.Write(".");
+				// Node is a leaf node.
+				if (p != null)
 				{
-					return false;
+					if (p.left == node)
+						p.left = null;
+					else
+						p.right = null;
 				}
+				else if (node == root)
+					root = null;
+
+				node.Parent = node.left = node.right = null;
+				return true;
+			}
+
+			if (node.left == null)
+			{
+				// Promote right
+				Console.Write("<");
+
+				if (p != null)
+				{
+					if (p.left == node)
+						p.left = node.right;
+					else
+						p.right = node.right;
+				}
+				else if (node == root)
+					root = node.right;
+
+				node.right.Parent = p;
+
+				return true;
+			}
+
+			if (node.right == null)
+			{
+				// Promote left
+				Console.Write(">");
+				if (p != null)
+				{
+					if (p.left == node)
+						p.left = node.left;
+					else
+						p.right = node.left;
+				}
+				else if (node == root)
+					root = node.left;
+
+				node.left.Parent = p;
+
+				return true;
+			}
+
+			// pick smallest child node from right and move key/value to this node
+			Node least = node.right.LeftMost;
+			Node leastp = least.Parent;
+
+			// Move least right child's value here
+			node.key = least.key;
+			node.value = least.value;
+
+			// now delete the small node
+			if (node.right == least)
+			{
+				node.right = least.right;
+				if (node.right != null)
+					node.right.Parent = node;
+			}
+			else if (least.right != null)
+			{
+				if (leastp.left == least)
+					leastp.left = least.right;
+				else
+					leastp.right = least.right;
+
+				least.right.Parent = leastp;
+				least.right = null;
 			}
 			else
 			{
-				if (compare == 0)
-				{
-					deleted = node;
-				}
-				if (!Delete(ref node.right, key))
-				{
-					return false;
-				}
-			}
-
-			if (deleted != null)
-			{
-				deleted.key = node.key;
-				deleted.value = node.value;
-				deleted = null;
-				node = node.right;
-			}
-			else if (node.left.level < node.level - 1
-					|| node.right.level < node.level - 1)
-			{
-				--node.level;
-				if (node.right.level > node.level)
-				{
-					node.right.level = node.level;
-				}
-				Skew(ref node);
-				Skew(ref node.right);
-				Skew(ref node.right.right);
-				Split(ref node);
-				Split(ref node.right);
+				Debug.Assert(leastp.left == least);
+				leastp.left = null;
 			}
 
 			return true;
 		}
 
+		public int Count { get { return this.Count(); } }
+
+		private Node Search(Node node, TValue value)
+		{
+			if (node == null)
+				return null;
+
+			int compare = Compare(value, node);
+			if (compare < 0)
+				return Search(node.left, value);
+			else if (compare > 0)
+				return Search(node.right, value);
+
+			return node;
+		}
+
+		private Node nSearch(Node node, TValue value)
+		{
+			Node c = root == null ? null : root.LeftMost;
+			while (c != null)
+			{
+				if (Compare(value, c) == 0)
+					return c;
+				c = c.next;
+			}
+			return null;
+		}
+
 		private Node Search(Node node, TKey key)
 		{
-			if (node == sentinel)
-			{
+			if (node == null)
 				return null;
-			}
 
 			//int compare = key.CompareTo(node.key);
 			int compare = Compare(key, node);
@@ -418,7 +517,22 @@ namespace CoreyM.Collections
 
 		public bool Remove(TKey key)
 		{
-			return Delete(ref root, key);
+			// return Delete(ref root, key);
+			Node n = Search(root, key);
+			if (n == null || KeyComparer.Compare(key, n.key) != 0)
+				return false;
+			return Delete(n);
+		}
+
+		public bool Remove(TValue val)
+		{
+			//return Delete(ref root, val);
+			Node n = Search(root, val);
+			if (n == null || ValueComparer.Compare(val, n.value) != 0)
+				return false;
+
+			bool res = Delete(n);
+			return res;
 		}
 
 		public TValue this[TKey key]
@@ -446,14 +560,9 @@ namespace CoreyM.Collections
 		{
 			get
 			{
-				Node curr = root;
-				if (curr.level < 1)
+				if (root == null)
 					return default(TValue);
-
-				while (curr.left.level > 0)
-					curr = curr.left;
-
-				return curr.value;
+				return root.LeftMost.value;
 			}
 		}
 	}
