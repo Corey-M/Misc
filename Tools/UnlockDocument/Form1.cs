@@ -19,8 +19,17 @@ namespace OMSUnlock
 		{
 			InitializeComponent();
 			this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+
+			if (!UserChecks.IsAdmin)
+			{
+				LockButton.Visible = false;
+				UnlockBtn.Visible = false;
+				groupBox1.Height = (LockButton.Top + LockButton.Height - groupBox1.Top);
+				Text = "Document CheckIn Status";
+			}
+
 #if testversion
-			this.Text = "Unlock OMS Document [Test Database]";
+			this.Text += " [Test Database]";
 #endif
 		}
 
