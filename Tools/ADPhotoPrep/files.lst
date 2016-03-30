@@ -1,0 +1,8 @@
+*.cs
+*.resx
+ADPhotoPrep.csproj
+App.config
+BitMiracle.LibJpeg.NET.dll.gz
+CC BY-SA 88x31.png
+Iconsmind-Outline-Portrait.ico
+Properties\*
